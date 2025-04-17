@@ -1,0 +1,36 @@
+[server]
+maxUploadSize = 200
+enableCORS = false
+enableXsrfProtection = true
+maxMessageSize = 200
+
+[browser]
+gatherUsageStats = false
+
+[runner]
+magicEnabled = true
+fastReruns = true
+
+[theme]
+primaryColor = "#FF4B4B"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0F2F6"
+textColor = "#262730"
+font = "sans serif"
+
+[client]
+showErrorDetails = false
+toolbarMode = "minimal"
+
+[logger]
+level = "error"
+messageFormat = "%(asctime)s - %(message)s"
+
+[cache]
+persist = true
+maxEntries = 100
+ttl = 3600
+
+[deprecation]
+showfileUploaderEncoding = false
+showPyplotGlobalUse = false 
