@@ -3,7 +3,14 @@ import base64
 import importlib
 import pandas as pd
 import gc
-from utils.memory_monitor import display_memory_usage, add_memory_cleanup_button
+
+# Try to import memory monitoring, but continue if not available
+try:
+    from utils.memory_monitor import display_memory_usage, add_memory_cleanup_button
+    MEMORY_MONITOR_AVAILABLE = True
+except ImportError:
+    MEMORY_MONITOR_AVAILABLE = False
+    print("Memory monitoring not available")
 
 
 # ===== Sidebar background =====
@@ -93,9 +100,10 @@ def main():
     st.sidebar.title("📌 Chức năng")
     selected = st.sidebar.radio("Chọn trang:", list(menu.keys()))
 
-    # Add memory monitoring
-    display_memory_usage()
-    add_memory_cleanup_button()
+    # Add memory monitoring if available
+    if MEMORY_MONITOR_AVAILABLE:
+        display_memory_usage()
+        add_memory_cleanup_button()
 
     # Gọi đúng module và hàm theo lựa chọn
     module_name, function_name, params = menu[selected]
