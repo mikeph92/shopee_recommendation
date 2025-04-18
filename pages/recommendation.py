@@ -2,6 +2,10 @@ import os
 import warnings
 import logging
 import gc
+import requests
+from PIL import Image
+from io import BytesIO
+import time
 # Hide all warnings 
 warnings.filterwarnings("ignore")
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="tensorflow")
@@ -86,6 +90,20 @@ def load_cf_model():
         st.error("An error occurred while loading the collaborative filtering model.")
         return None, None
 
+@st.cache_data(ttl=3600)
+def load_and_cache_image(image_url):
+    try:
+        if not image_url or pd.isna(image_url):
+            return "images/no_image.jpg"
+            
+        response = requests.get(image_url, timeout=5)
+        if response.status_code == 200:
+            # Verify it's an image
+            Image.open(BytesIO(response.content))
+            return image_url
+        return "images/no_image.jpg"
+    except Exception:
+        return "images/no_image.jpg"
 
 # ====== Hiển thị sản phẩm gợi ý ======
 def display_recommendations(result_df, is_cb=True):
@@ -99,8 +117,13 @@ def display_recommendations(result_df, is_cb=True):
     total_pages = (total_items + items_per_page - 1) // items_per_page
     
     if total_pages > 1:
-        current_page = st.number_input('Trang', min_value=1, max_value=total_pages, value=1) - 1
-        start_idx = current_page * items_per_page
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            current_page = st.number_input('Trang', min_value=1, max_value=total_pages, value=1)
+        with col2:
+            st.markdown(f"**Tổng số trang: {total_pages}**")
+        
+        start_idx = (current_page - 1) * items_per_page
         end_idx = min(start_idx + items_per_page, total_items)
         current_items = result_df.iloc[start_idx:end_idx]
     else:
@@ -111,23 +134,8 @@ def display_recommendations(result_df, is_cb=True):
         with st.container():
             cols = st.columns([1, 4])
             with cols[0]:
-                try:
-                    # Use a placeholder while loading image
-                    image_placeholder = st.empty()
-                    image_placeholder.image("images/loading.gif", width=120)
-                    
-                    # Load image in background
-                    @st.cache_data(ttl=3600)
-                    def load_image(image_url):
-                        try:
-                            return image_url
-                        except:
-                            return "images/no_image.jpg"
-                    
-                    image_url = load_image(row['image'])
-                    image_placeholder.image(image_url, width=120)
-                except:
-                    st.image("images/no_image.jpg", width=120)
+                image_url = load_and_cache_image(row['image'])
+                st.image(image_url, width=120, use_column_width=True)
 
             with cols[1]:
                 mota = str(row['description'])
@@ -198,21 +206,27 @@ def display_carousel(result_df, num_cols=3):
 def product_recommendation(products_df, ratings_df):
     st.header("🎯 Hệ thống gợi ý sản phẩm")
 
-    method = st.selectbox("🔍 Chọn phương pháp gợi ý:", ["Gợi ý theo nội dung", "Gợi ý theo người dùng"])
-    model_cb = load_cb_model()
-    model_cf, meta = load_cf_model()
-    user_mapping = meta["user_mapping"]
-    product_mapping = meta["product_mapping"]
-    mu = meta["mu"]
+    if products_df is None or ratings_df is None:
+        st.error("Không thể tải dữ liệu. Vui lòng thử lại sau.")
+        return
 
+    method = st.selectbox("🔍 Chọn phương pháp gợi ý:", ["Gợi ý theo nội dung", "Gợi ý theo người dùng"])
+    
+    # Load models
     if method == "Gợi ý theo nội dung":
+        model_cb = load_cb_model()
+        if model_cb is None:
+            st.error("Không thể tải mô hình gợi ý theo nội dung.")
+            return
+            
         search_mode = st.radio("Chọn cách tìm kiếm:", ["Từ khóa", "Mã sản phẩm"])
 
         if search_mode == "Từ khóa":
             keyword = st.text_input("Nhập từ khóa (ví dụ: áo thun)")
             if st.button("Gợi ý", key="btn_cb_keyword"):
-                result = search_and_recommend(model_cb, products_df, keyword, top_k=10)
-                display_recommendations(result, is_cb=True)
+                with st.spinner("Đang tìm kiếm sản phẩm..."):
+                    result = search_and_recommend(model_cb, products_df, keyword, top_k=10)
+                    display_recommendations(result, is_cb=True)
 
         elif search_mode == "Mã sản phẩm":
             my_dict = list(model_cb["cosine_similarity"].items())
@@ -222,72 +236,89 @@ def product_recommendation(products_df, ratings_df):
 
             if st.button("Gợi ý", key="btn_cb_product"):
                 try:
-                    result = recommend_by_product_id(model_cb, products_df, product_id, top_k=10)
-                    product = products_df[products_df['product_id'] == product_id]
-                    
-                    st.markdown(f"### 🛒 <span style='color:#1f77b4'>Sản phẩm đang xem:</span> <strong>{product_id}</strong>", unsafe_allow_html=True)
-                    display_recommendations(product, is_cb=True)
-                    
-                    st.markdown("### 🎯 <span style='color:#2ca02c'>Sản phẩm gợi ý:</span>", unsafe_allow_html=True)
-                    display_recommendations(result, is_cb=True)
+                    with st.spinner("Đang tìm kiếm sản phẩm tương tự..."):
+                        result = recommend_by_product_id(model_cb, products_df, product_id, top_k=10)
+                        product = products_df[products_df['product_id'] == product_id]
+                        
+                        st.markdown(f"### 🛒 <span style='color:#1f77b4'>Sản phẩm đang xem:</span> <strong>{product_id}</strong>", unsafe_allow_html=True)
+                        display_recommendations(product, is_cb=True)
+                        
+                        st.markdown("### 🎯 <span style='color:#2ca02c'>Sản phẩm gợi ý:</span>", unsafe_allow_html=True)
+                        display_recommendations(result, is_cb=True)
                 except Exception as e:
-                    st.error(f"Lỗi: {e}")
+                    st.error(f"Có lỗi xảy ra: {str(e)}")
 
     elif method == "Gợi ý theo người dùng":
-        user_map_df = ratings_df[['user_id', 'user']].drop_duplicates()
-        user_map = dict(zip(user_map_df['user_id'], user_map_df['user']))
+        model_cf, meta = load_cf_model()
+        if model_cf is None or meta is None:
+            st.error("Không thể tải mô hình gợi ý theo người dùng.")
+            return
+            
+        try:
+            # Create user mapping DataFrame safely
+            user_map_df = ratings_df[['user_id', 'user']].drop_duplicates().reset_index(drop=True)
+            user_map = dict(zip(user_map_df['user_id'].tolist(), user_map_df['user'].tolist()))
+            
+            st.subheader("👥 Danh sách người dùng và mã ID")
+            st.dataframe(user_map_df, use_container_width=True)
+            
+            user_ids = list(user_map.keys())
+            st.markdown("""
+            ### 🔑 <span style='color:#0e76a8;'>Nhập mã khách hàng</span>  
+            <small><i>Ví dụ: <code>5</code>, <code>290</code>, <code>777</code>, <code>20000</code></i></small>
+            """, unsafe_allow_html=True)
 
-        st.subheader("👥 Danh sách người dùng và mã ID")
-        st.dataframe(user_map_df.reset_index(drop=True), use_container_width=True)
-        
-        user_ids = user_map.keys()
-        st.markdown("""
-        ### 🔑 <span style='color:#0e76a8;'>Nhập mã khách hàng</span>  
-        <small><i>Ví dụ: <code>5</code>, <code>290</code>, <code>777</code>, <code>20000</code></i></small>
-        """, unsafe_allow_html=True)
+            selected_user = st.text_input(" ", key="user_input")
 
-        selected_user = st.text_input(" ", key="user_input")
-
-        if st.button("Gợi ý", key="btn_cf_user"):
-            if selected_user:
-                try:
-                    user_id = int(selected_user)  # nếu là số
-                    if user_id not in user_ids:
-                        st.error("⚠️ Mã khách hàng không tồn tại trong hệ thống hoặc chưa có lịch sử đánh giá!")
-                    else:
-                        user_name = user_map.get(user_id, "Không xác định")
-
-                        st.markdown(f"""
-                        <div style="font-size:20px; font-weight:600;">
-                            👤 <span style="color:#0e76a8;">Tên người dùng:</span> {user_name}
-                        </div>
-                        """, unsafe_allow_html=True)
-                        
-                        st.markdown("####")
-                        st.subheader("🛍️ Sản phẩm đã đánh giá:")
-                        user_rated_df = ratings_df[ratings_df['user_id'] == user_id]
-                        rated_products = products_df[products_df['product_id'].isin(user_rated_df['product_id'])].copy()
-
-                        display_carousel(rated_products)
-
-
-                        result = get_top_n_recommendations(
-                            product_df=products_df,
-                            user_id=user_id,
-                            model=model_cf,
-                            user_mapping = user_mapping,
-                            product_mapping = product_mapping,
-                            mu = mu,
-                            rated_products=rated_products,
-                            n=10
-                        )
-                                                
-                        st.markdown("##")
-                        st.subheader("🎁 Gợi ý sản phẩm dựa trên hành vi người dùng:")
-                        display_recommendations(result, is_cb=False)
-                except ValueError:
-                    st.error("❌ Mã khách hàng phải là một số nguyên!")
-                except Exception as e:
-                    st.error(f"Lỗi khi gợi ý: {e}")
-            else:
-                st.error("⚠️ Vui lòng nhập Mã khách hàng!")
+            if st.button("Gợi ý", key="btn_cf_user"):
+                if selected_user:
+                    try:
+                        user_id = int(selected_user)
+                        if user_id not in user_ids:
+                            st.error("⚠️ Mã khách hàng không tồn tại trong hệ thống hoặc chưa có lịch sử đánh giá!")
+                        else:
+                            user_name = user_map.get(user_id, "Không xác định")
+                            
+                            st.markdown(f"""
+                            <div style="font-size:20px; font-weight:600;">
+                                👤 <span style="color:#0e76a8;">Tên người dùng:</span> {user_name}
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            st.markdown("####")
+                            st.subheader("🛍️ Sản phẩm đã đánh giá:")
+                            user_rated_df = ratings_df[ratings_df['user_id'] == user_id]
+                            rated_products = products_df[products_df['product_id'].isin(user_rated_df['product_id'])].copy()
+                            
+                            if not rated_products.empty:
+                                display_carousel(rated_products)
+                                
+                                with st.spinner("Đang tìm kiếm sản phẩm phù hợp..."):
+                                    result = get_top_n_recommendations(
+                                        product_df=products_df,
+                                        user_id=user_id,
+                                        model=model_cf,
+                                        user_mapping=meta['user_mapping'],
+                                        product_mapping=meta['product_mapping'],
+                                        mu=meta['mu'],
+                                        rated_products=rated_products,
+                                        n=10
+                                    )
+                                    
+                                st.markdown("##")
+                                st.subheader("🎁 Gợi ý sản phẩm dựa trên hành vi người dùng:")
+                                display_recommendations(result, is_cb=False)
+                            else:
+                                st.warning("Người dùng chưa có lịch sử đánh giá sản phẩm.")
+                                
+                    except ValueError:
+                        st.error("❌ Mã khách hàng phải là một số nguyên!")
+                    except Exception as e:
+                        st.error("Có lỗi xảy ra khi tìm kiếm gợi ý. Vui lòng thử lại sau.")
+                        logging.error(f"Error in collaborative filtering: {str(e)}")
+                else:
+                    st.error("⚠️ Vui lòng nhập Mã khách hàng!")
+                    
+        except Exception as e:
+            st.error("Có lỗi xảy ra khi xử lý dữ liệu người dùng.")
+            logging.error(f"Error in user data processing: {str(e)}")

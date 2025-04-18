@@ -5,38 +5,38 @@ import gc
 import numpy as np
 import pandas as pd
 
-def get_memory_usage():
-    """Get current memory usage of the process"""
+MEMORY_THRESHOLD = 85  # Percentage
+
+def get_process_memory():
     process = psutil.Process(os.getpid())
-    memory_info = process.memory_info()
-    memory_usage_mb = memory_info.rss / 1024 / 1024  # Convert to MB
-    return memory_usage_mb
+    return process.memory_percent()
 
 def display_memory_usage():
-    """Display current memory usage in Streamlit"""
-    memory_usage = get_memory_usage()
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### 🔧 System Monitor")
-    st.sidebar.markdown(f"Memory Usage: **{memory_usage:.1f} MB**")
-
-def clear_memory():
-    """Clear memory by running garbage collection"""
-    # Clear all caches
-    if hasattr(st, 'cache_data'):
-        st.cache_data.clear()
-    if hasattr(st, 'cache_resource'):
-        st.cache_resource.clear()
+    # Get memory usage
+    memory_usage = get_process_memory()
     
-    # Run garbage collection
+    # Create a progress bar for memory usage
+    col1, col2 = st.sidebar.columns([3, 1])
+    with col1:
+        st.progress(min(memory_usage/100, 1.0))
+    with col2:
+        st.write(f"{memory_usage:.1f}%")
+        
+    # Automatic cleanup if memory usage is too high
+    if memory_usage > MEMORY_THRESHOLD:
+        perform_memory_cleanup()
+        st.sidebar.warning("🧹 Đã tự động dọn dẹp bộ nhớ!")
+
+def perform_memory_cleanup():
+    # Force garbage collection
     gc.collect()
     
-    # Get memory after cleanup
-    memory_after = get_memory_usage()
-    return memory_after
+    # Clear Streamlit cache if memory is still high
+    if get_process_memory() > MEMORY_THRESHOLD:
+        st.cache_data.clear()
+        st.cache_resource.clear()
 
 def add_memory_cleanup_button():
-    """Add a button to clear memory cache"""
-    if st.sidebar.button("🧹 Clear Memory Cache"):
-        memory_before = get_memory_usage()
-        memory_after = clear_memory()
-        st.sidebar.success(f"Memory cleaned! ({memory_before:.1f}MB → {memory_after:.1f}MB)") 
+    if st.sidebar.button("🧹 Dọn dẹp bộ nhớ"):
+        perform_memory_cleanup()
+        st.sidebar.success("✅ Đã dọn dẹp bộ nhớ!") 

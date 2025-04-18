@@ -6,30 +6,108 @@ import pandas as pd
 import warnings
 warnings.filterwarnings("ignore")
 import plotly.graph_objs as go
+import numpy as np
+import gc
 
 
 # Trang phân cụm khách hàng
-def data_insight(products_clean, rating_clean):
+def data_insight(products_df, ratings_df):
+    if products_df is None or ratings_df is None:
+        st.error("Không thể tải dữ liệu. Vui lòng thử lại sau.")
+        return
+        
+    st.title("📊 Khám phá dữ liệu")
+    
+    try:
+        # 1. Thống kê cơ bản
+        st.header("1️⃣ Thống kê cơ bản")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Tổng số sản phẩm", f"{len(products_df):,}")
+            st.metric("Số danh mục con", f"{products_df['sub_category'].nunique():,}")
+            
+        with col2:
+            st.metric("Tổng số đánh giá", f"{len(ratings_df):,}")
+            st.metric("Số người dùng", f"{ratings_df['user_id'].nunique():,}")
+        
+        # 2. Phân bố giá
+        st.header("2️⃣ Phân bố giá sản phẩm")
+        
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.histplot(data=products_df, x='price', bins=50, ax=ax)
+        ax.set_title('Phân bố giá sản phẩm')
+        ax.set_xlabel('Giá (VNĐ)')
+        ax.set_ylabel('Số lượng')
+        st.pyplot(fig)
+        plt.close(fig)
+        
+        # 3. Top danh mục
+        st.header("3️⃣ Top danh mục sản phẩm")
+        
+        category_counts = products_df['sub_category'].value_counts().head(10)
+        fig, ax = plt.subplots(figsize=(12, 6))
+        category_counts.plot(kind='bar', ax=ax)
+        ax.set_title('Top 10 danh mục sản phẩm')
+        ax.set_xlabel('Danh mục')
+        ax.set_ylabel('Số lượng sản phẩm')
+        plt.xticks(rotation=45, ha='right')
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close(fig)
+        
+        # 4. Phân bố độ dài mô tả
+        st.header("4️⃣ Phân bố độ dài mô tả sản phẩm")
+        
+        # Calculate description lengths safely
+        products_df['desc_len'] = products_df['description'].fillna('').astype(str).str.len()
+        
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.histplot(data=products_df, x='desc_len', bins=50, ax=ax)
+        ax.set_title('Phân bố độ dài mô tả sản phẩm')
+        ax.set_xlabel('Độ dài mô tả (ký tự)')
+        ax.set_ylabel('Số lượng')
+        st.pyplot(fig)
+        plt.close(fig)
+        
+        # 5. Phân bố rating
+        st.header("5️⃣ Phân bố đánh giá")
+        
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.histplot(data=ratings_df, x='rating', bins=20, ax=ax)
+        ax.set_title('Phân bố điểm đánh giá')
+        ax.set_xlabel('Điểm đánh giá')
+        ax.set_ylabel('Số lượng')
+        st.pyplot(fig)
+        plt.close(fig)
+        
+        # Clear memory
+        gc.collect()
+        
+    except Exception as e:
+        st.error("Có lỗi xảy ra khi phân tích dữ liệu. Vui lòng thử lại sau.")
+        st.exception(e)
+
     st.image("images/insight.jpeg", width=1000)
     st.title("Một số thông tin về dữ liệu")
 
     st.markdown("### 🛍️ Dữ liệu sản phẩm")
-    st.dataframe(products_clean.head(10))
+    st.dataframe(products_df.head(10))
     st.markdown("### ⭐ Dữ liệu đánh giá sản phẩm")
-    st.dataframe(rating_clean.head(10))
+    st.dataframe(ratings_df.head(10))
 
     
     # Tính các chỉ số
-    num_products = products_clean['product_id'].nunique()
-    num_users = rating_clean['user_id'].nunique()
-    num_ratings = rating_clean.shape[0]
+    num_products = products_df['product_id'].nunique()
+    num_users = ratings_df['user_id'].nunique()
+    num_ratings = ratings_df.shape[0]
     
     # Merge để lấy thông tin price, product_name
-    eda_merged = rating_clean.merge(products_clean[['product_id', 'price', 'product_name']], on='product_id', how='left')
+    eda_merged = ratings_df.merge(products_df[['product_id', 'price', 'product_name']], on='product_id', how='left')
 
     # User đánh giá nhiều nhất
-    top_reviewer = rating_clean['user_id'].value_counts().idxmax()
-    top_reviewer_count = rating_clean['user_id'].value_counts().max()
+    top_reviewer = ratings_df['user_id'].value_counts().idxmax()
+    top_reviewer_count = ratings_df['user_id'].value_counts().max()
 
     # User chi tiêu nhiều nhất
     user_spend = eda_merged.groupby('user_id')['price'].sum()
@@ -37,17 +115,17 @@ def data_insight(products_clean, rating_clean):
     top_spend_amount = user_spend.max()
 
     # User rating 5 sao nhiều nhất
-    one_star_users = rating_clean[rating_clean['rating'] == 5]['user_id'].value_counts()
+    one_star_users = ratings_df[ratings_df['rating'] == 5]['user_id'].value_counts()
     top_one_star_user = one_star_users.idxmax()
     top_one_star_count = one_star_users.max()
 
     # Sản phẩm bán chạy nhất (nhiều đánh giá nhất)
-    top_product_id = rating_clean['product_id'].value_counts().idxmax()
-    top_product_name = products_clean.loc[products_clean['product_id'] == top_product_id, 'product_name'].values[0]
+    top_product_id = ratings_df['product_id'].value_counts().idxmax()
+    top_product_name = products_df.loc[products_df['product_id'] == top_product_id, 'product_name'].values[0]
 
     # Sản phẩm bán ít nhất (ít đánh giá nhất)
-    least_product_id = rating_clean['product_id'].value_counts().idxmin()
-    least_product_name = products_clean.loc[products_clean['product_id'] == least_product_id, 'product_name'].values[0]
+    least_product_id = ratings_df['product_id'].value_counts().idxmin()
+    least_product_name = products_df.loc[products_df['product_id'] == least_product_id, 'product_name'].values[0]
 
     col1, col2, col3 = st.columns(3)
 
@@ -73,7 +151,7 @@ def data_insight(products_clean, rating_clean):
 
 
     # Tính top nhóm hàng phổ biến
-    top_subcat = products_clean['sub_category'].value_counts().head(10)
+    top_subcat = products_df['sub_category'].value_counts().head(10)
     # Tiêu đề
     st.subheader("📦 Top 10 Nhóm Hàng Phổ Biến Nhất")
 
@@ -94,7 +172,7 @@ def data_insight(products_clean, rating_clean):
     st.pyplot(fig)
     
     # Tính top 20 tên sản phẩm lặp lại nhiều nhất
-    top_names = products_clean['product_name'].value_counts().head(20)
+    top_names = products_df['product_name'].value_counts().head(20)
 
     # Hiển thị tiêu đề
     st.subheader("🛍️ Top 20 Tên Sản Phẩm Phổ Biến Nhất")
@@ -120,7 +198,7 @@ def data_insight(products_clean, rating_clean):
     # Vẽ biểu đồ violin
     fig, ax = plt.subplots(figsize=(12, 6))
     sns.violinplot(
-        data=products_clean,
+        data=products_df,
         x='sub_category',
         y='price',
         inner='quartile',
@@ -143,7 +221,7 @@ def data_insight(products_clean, rating_clean):
     # Vẽ biểu đồ boxplot
     fig, ax = plt.subplots(figsize=(12, 6))
     sns.boxplot(
-        data=products_clean,
+        data=products_df,
         x='sub_category',
         y='rating',
         palette='Set3',
@@ -165,7 +243,7 @@ def data_insight(products_clean, rating_clean):
     # Vẽ biểu đồ scatter plot
     fig, ax = plt.subplots(figsize=(10, 6))
     sns.scatterplot(
-        data=products_clean,
+        data=products_df,
         x='rating',
         y='price',
         hue='sub_category',
@@ -185,7 +263,7 @@ def data_insight(products_clean, rating_clean):
     st.pyplot(fig)
     
     # Tính giá trung bình theo nhóm sản phẩm
-    avg_price = products_clean.groupby('sub_category')['price'].mean().sort_values()
+    avg_price = products_df.groupby('sub_category')['price'].mean().sort_values()
 
     # Tiêu đề
     st.subheader("💰 Giá Trung Bình Theo Nhóm Sản Phẩm")
@@ -207,7 +285,7 @@ def data_insight(products_clean, rating_clean):
     st.pyplot(fig)
     
     # Tính rating trung bình theo nhóm sản phẩm
-    avg_rating = products_clean.groupby('sub_category')['rating'].mean().sort_values()
+    avg_rating = products_df.groupby('sub_category')['rating'].mean().sort_values()
 
     # Tiêu đề
     st.subheader("⭐ Rating Trung Bình Theo Nhóm Sản Phẩm")
@@ -232,7 +310,7 @@ def data_insight(products_clean, rating_clean):
 
         
     # Tính toán tỷ lệ đánh giá
-    values = rating_clean.rating.value_counts()
+    values = ratings_df.rating.value_counts()
     labels = values.index
     colors = ['red', 'blue', 'green', 'yellow', 'black']
 
@@ -255,8 +333,8 @@ def data_insight(products_clean, rating_clean):
     st.plotly_chart(fig)
     
     # Lọc các sản phẩm có rating = 5
-    five_star_ratings = rating_clean[rating_clean['rating'] == 5]
-    five_star_ratings = five_star_ratings.merge(products_clean[['product_id', 'product_name', 'sub_category']], on='product_id', how='left')
+    five_star_ratings = ratings_df[ratings_df['rating'] == 5]
+    five_star_ratings = five_star_ratings.merge(products_df[['product_id', 'product_name', 'sub_category']], on='product_id', how='left')
 
     # Nhóm sản phẩm và đếm số lần đánh giá 5 sao
     top_product = five_star_ratings['product_name'].value_counts().reset_index()
@@ -323,10 +401,10 @@ def data_insight(products_clean, rating_clean):
     st.pyplot(fig)
     
     # Lọc các sản phẩm có rating = 1
-    one_star_ratings = rating_clean[rating_clean['rating'] == 1]
+    one_star_ratings = ratings_df[ratings_df['rating'] == 1]
 
-    # Kết hợp dữ liệu từ eda_df và products_clean để có được product_name
-    one_star_ratings = one_star_ratings.merge(products_clean[['product_id', 'product_name']], on='product_id', how='left')
+    # Kết hợp dữ liệu từ eda_df và products_df để có được product_name
+    one_star_ratings = one_star_ratings.merge(products_df[['product_id', 'product_name']], on='product_id', how='left')
 
     # Nhóm sản phẩm và đếm số lần đánh giá 1 sao
     top_product = one_star_ratings['product_name'].value_counts().reset_index()
@@ -363,7 +441,7 @@ def data_insight(products_clean, rating_clean):
     st.subheader("📊 Phân bố độ dài mô tả sản phẩm")
 
     fig, ax = plt.subplots(figsize=(8, 4))
-    sns.histplot(products_clean['desc_len'], bins=50, kde=True, ax=ax)
+    sns.histplot(products_df['desc_len'], bins=50, kde=True, ax=ax)
     ax.set_title("Phân bố độ dài mô tả sản phẩm")
     ax.set_xlabel("Số từ")
     ax.set_ylabel("Số sản phẩm")
