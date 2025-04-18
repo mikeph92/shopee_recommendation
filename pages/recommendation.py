@@ -22,6 +22,37 @@ import joblib
 from tensorflow.keras.models import load_model
 from utils.content_based_top20 import *
 from utils.collaborative import get_top_n_recommendations
+import pandas as pd
+from tensorflow.keras.losses import MeanSquaredError
+from tensorflow.keras.optimizers import SGD
+from tensorflow.keras.metrics import MeanSquaredError as MSE
+
+# Custom InputLayer for backward compatibility
+class CustomInputLayer(tf.keras.layers.InputLayer):
+    def __init__(self, batch_shape=None, **kwargs):
+        if batch_shape is not None:
+            input_shape = batch_shape[1:]
+            kwargs['input_shape'] = input_shape
+        super(CustomInputLayer, self).__init__(**kwargs)
+
+    def get_config(self):
+        config = super(CustomInputLayer, self).get_config()
+        return config
+
+# Custom DTypePolicy for backward compatibility
+class CustomDTypePolicy:
+    def __init__(self, name):
+        self.name = name
+
+    def __eq__(self, other):
+        return self.name == other.name
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(config['name'])
+
+    def get_config(self):
+        return {'name': self.name}
 
 # Configure TensorFlow to use memory growth
 physical_devices = tf.config.list_physical_devices('GPU')
@@ -52,55 +83,38 @@ def load_cb_model():
         st.error("An error occurred while loading the content-based model.")
         return None
 
-@st.cache_resource(ttl=3600)  # Cache for 1 hour
+@st.cache_resource
 def load_cf_model():
-    try:
-        path_model = "models/matrix_factorizer_keras_model.h5"
-        path_meta = "models/id_mappings.pkl"
+    path_model = "models/matrix_factorizer_keras_model.h5"
+    path_meta = "models/id_mappings.pkl"
 
-        if not os.path.exists(path_model) or not os.path.exists(path_meta):
-            st.error("Model files not found.")
-            return None, None
-        
-        with st.spinner('Loading collaborative filtering model...'):
-            # Load model with memory optimization
-            with tf.device('/CPU:0'):  # Force CPU usage
-                model = load_model(path_model, compile=False)
-                # Convert model to TF-Lite format for smaller memory footprint
-                converter = tf.lite.TFLiteConverter.from_keras_model(model)
-                converter.optimizations = [tf.lite.Optimize.DEFAULT]
-                tflite_model = converter.convert()
-                
-            # Load metadata with minimal data
-            meta = joblib.load(path_meta)
-            if isinstance(meta, dict):
-                # Only keep necessary mappings
-                meta = {
-                    'user_mapping': meta.get('user_mapping', {}),
-                    'product_mapping': meta.get('product_mapping', {}),
-                    'mu': meta.get('mu', 0.0)
-                }
-            
-            # Clear any unused memory
-            gc.collect()
-            
-            return tflite_model, meta
-    except Exception as e:
-        # Generic error message
-        st.error("An error occurred while loading the collaborative filtering model.")
-        return None, None
+    if not os.path.exists(path_model):
+        st.error("❌ Không tìm thấy file models/matrix_factorizer_keras_model.h5")
+        st.stop()
+    elif not os.path.exists(path_meta):
+        st.error("❌ Không tìm thấy file models/id_mappings.pkl")
+        st.stop()
+    return load_model(path_model), joblib.load(path_meta)
 
 @st.cache_data(ttl=3600)
 def load_and_cache_image(image_url):
+    """Cache and load images with proper error handling"""
     try:
-        if not image_url or pd.isna(image_url):
+        if pd.isna(image_url) or not image_url or not isinstance(image_url, str):
+            return "images/no_image.jpg"
+            
+        # Basic URL validation
+        if not image_url.startswith(('http://', 'https://')):
             return "images/no_image.jpg"
             
         response = requests.get(image_url, timeout=5)
         if response.status_code == 200:
             # Verify it's an image
-            Image.open(BytesIO(response.content))
-            return image_url
+            try:
+                Image.open(BytesIO(response.content))
+                return image_url
+            except:
+                return "images/no_image.jpg"
         return "images/no_image.jpg"
     except Exception:
         return "images/no_image.jpg"
@@ -111,31 +125,20 @@ def display_recommendations(result_df, is_cb=True):
         st.warning("🙁 Không tìm thấy sản phẩm phù hợp.")
         return
 
-    # Add pagination
-    items_per_page = 5
     total_items = len(result_df)
-    total_pages = (total_items + items_per_page - 1) // items_per_page
-    
-    if total_pages > 1:
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            current_page = st.number_input('Trang', min_value=1, max_value=total_pages, value=1)
-        with col2:
-            st.markdown(f"**Tổng số trang: {total_pages}**")
-        
-        start_idx = (current_page - 1) * items_per_page
-        end_idx = min(start_idx + items_per_page, total_items)
-        current_items = result_df.iloc[start_idx:end_idx]
-    else:
-        current_items = result_df
+    st.markdown(f"*Tìm thấy {total_items} sản phẩm phù hợp*")
 
-    # Display current page items
-    for _, row in current_items.iterrows():
+    # Display all items
+    for _, row in result_df.iterrows():
         with st.container():
             cols = st.columns([1, 4])
             with cols[0]:
-                image_url = load_and_cache_image(row['image'])
-                st.image(image_url, width=120, use_column_width=True)
+                try:
+                    # Use the cached image loading function
+                    image_url = load_and_cache_image(row['image'])
+                    st.image(image_url, width=120)
+                except Exception as e:
+                    st.image("images/no_image.jpg", width=120)
 
             with cols[1]:
                 mota = str(row['description'])
@@ -158,10 +161,6 @@ def display_recommendations(result_df, is_cb=True):
                             <a href="{row['link']}" target="_blank">👉 Xem chi tiết sản phẩm</a>
                             """, unsafe_allow_html=True)
             st.markdown("---")
-            
-    # Show pagination info
-    if total_pages > 1:
-        st.markdown(f"*Hiển thị {start_idx + 1}-{end_idx} trên tổng số {total_items} sản phẩm*")
 
 def display_carousel(result_df, num_cols=3):
     if result_df is None or result_df.empty:
@@ -255,14 +254,15 @@ def product_recommendation(products_df, ratings_df):
             return
             
         try:
-            # Create user mapping DataFrame safely
-            user_map_df = ratings_df[['user_id', 'user']].drop_duplicates().reset_index(drop=True)
-            user_map = dict(zip(user_map_df['user_id'].tolist(), user_map_df['user'].tolist()))
+            # Check if required columns exist in ratings_df
+            if 'user_id' not in ratings_df.columns:
+                st.error("Dữ liệu đánh giá không có cột 'user_id'.")
+                return
             
-            st.subheader("👥 Danh sách người dùng và mã ID")
-            st.dataframe(user_map_df, use_container_width=True)
+            st.subheader("👥 Danh sách người dùng và mã sản phẩm")
+            st.dataframe(ratings_df, use_container_width=True)
             
-            user_ids = list(user_map.keys())
+            user_ids = list(ratings_df['user_id'].unique())
             st.markdown("""
             ### 🔑 <span style='color:#0e76a8;'>Nhập mã khách hàng</span>  
             <small><i>Ví dụ: <code>5</code>, <code>290</code>, <code>777</code>, <code>20000</code></i></small>
@@ -276,14 +276,12 @@ def product_recommendation(products_df, ratings_df):
                         user_id = int(selected_user)
                         if user_id not in user_ids:
                             st.error("⚠️ Mã khách hàng không tồn tại trong hệ thống hoặc chưa có lịch sử đánh giá!")
-                        else:
-                            user_name = user_map.get(user_id, "Không xác định")
-                            
-                            st.markdown(f"""
-                            <div style="font-size:20px; font-weight:600;">
-                                👤 <span style="color:#0e76a8;">Tên người dùng:</span> {user_name}
-                            </div>
-                            """, unsafe_allow_html=True)
+                        else:                            
+                            # st.markdown(f"""
+                            # <div style="font-size:20px; font-weight:600;">
+                            #     👤 <span style="color:#0e76a8;">Tên người dùng:</span> {user_name}
+                            # </div>
+                            # """, unsafe_allow_html=True)
                             
                             st.markdown("####")
                             st.subheader("🛍️ Sản phẩm đã đánh giá:")
@@ -294,31 +292,40 @@ def product_recommendation(products_df, ratings_df):
                                 display_carousel(rated_products)
                                 
                                 with st.spinner("Đang tìm kiếm sản phẩm phù hợp..."):
-                                    result = get_top_n_recommendations(
-                                        product_df=products_df,
-                                        user_id=user_id,
-                                        model=model_cf,
-                                        user_mapping=meta['user_mapping'],
-                                        product_mapping=meta['product_mapping'],
-                                        mu=meta['mu'],
-                                        rated_products=rated_products,
-                                        n=10
-                                    )
-                                    
-                                st.markdown("##")
-                                st.subheader("🎁 Gợi ý sản phẩm dựa trên hành vi người dùng:")
-                                display_recommendations(result, is_cb=False)
+                                    try:
+                                        # Check if user_id exists in user_mapping
+                                        if user_id not in meta['user_mapping']:
+                                            st.error(f"⚠️ Mã khách hàng {user_id} không tồn tại trong mô hình gợi ý.")
+                                            return
+                                            
+                                        result = get_top_n_recommendations(
+                                            product_df=products_df,
+                                            user_id=user_id,
+                                            model=model_cf,
+                                            user_mapping=meta['user_mapping'],
+                                            product_mapping=meta['product_mapping'],
+                                            mu=meta['mu'],
+                                            rated_products=rated_products,
+                                            n=10
+                                        )
+                                        
+                                        st.markdown("##")
+                                        st.subheader("🎁 Gợi ý sản phẩm dựa trên hành vi người dùng:")
+                                        display_recommendations(result, is_cb=False)
+                                    except Exception as e:
+                                        st.error(f"Lỗi khi tạo gợi ý: {str(e)}")
+                                        logging.error(f"Error in get_top_n_recommendations: {str(e)}")
                             else:
                                 st.warning("Người dùng chưa có lịch sử đánh giá sản phẩm.")
                                 
                     except ValueError:
                         st.error("❌ Mã khách hàng phải là một số nguyên!")
                     except Exception as e:
-                        st.error("Có lỗi xảy ra khi tìm kiếm gợi ý. Vui lòng thử lại sau.")
+                        st.error(f"Có lỗi xảy ra khi tìm kiếm gợi ý: {str(e)}")
                         logging.error(f"Error in collaborative filtering: {str(e)}")
                 else:
                     st.error("⚠️ Vui lòng nhập Mã khách hàng!")
                     
         except Exception as e:
-            st.error("Có lỗi xảy ra khi xử lý dữ liệu người dùng.")
+            st.error(f"Có lỗi xảy ra khi xử lý dữ liệu người dùng: {str(e)}")
             logging.error(f"Error in user data processing: {str(e)}")

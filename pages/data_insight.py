@@ -9,84 +9,186 @@ import plotly.graph_objs as go
 import numpy as np
 import gc
 
+@st.cache_data(ttl=3600)
+def calculate_basic_stats(products_df, ratings_df):
+    stats = {
+        'num_products': len(products_df),
+        'num_categories': products_df['sub_category'].nunique(),
+        'num_ratings': len(ratings_df),
+        'num_users': ratings_df['user_id'].nunique()
+    }
+    return stats
 
-# Trang phân cụm khách hàng
+@st.cache_data(ttl=3600)
+def calculate_user_stats(ratings_df, products_df):
+    try:
+        # Merge with minimal columns
+        eda_merged = ratings_df.merge(
+            products_df[['product_id', 'price']],
+            on='product_id',
+            how='left'
+        )
+        
+        stats = {
+            'top_reviewer': ratings_df['user_id'].value_counts().idxmax(),
+            'top_reviewer_count': ratings_df['user_id'].value_counts().max(),
+            'top_spender': eda_merged.groupby('user_id')['price'].sum().idxmax(),
+            'top_spend_amount': eda_merged.groupby('user_id')['price'].sum().max(),
+            'top_five_star_user': ratings_df[ratings_df['rating'] == 5]['user_id'].value_counts().idxmax(),
+            'top_five_star_count': ratings_df[ratings_df['rating'] == 5]['user_id'].value_counts().max()
+        }
+        
+        del eda_merged
+        gc.collect()
+        
+        return stats
+    except Exception as e:
+        st.error(f"Error calculating user statistics: {str(e)}")
+        return None
+
+def create_figure(func):
+    """Decorator to handle figure creation and cleanup"""
+    def wrapper(*args, **kwargs):
+        try:
+            fig = func(*args, **kwargs)
+            st.pyplot(fig)
+            plt.close(fig)
+            gc.collect()
+        except Exception as e:
+            st.error(f"Error creating visualization: {str(e)}")
+    return wrapper
+
+@create_figure
+def plot_price_distribution(products_df):
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.histplot(data=products_df, x='price', bins=50, ax=ax)
+    ax.set_title('Phân bố giá sản phẩm')
+    ax.set_xlabel('Giá (VNĐ)')
+    ax.set_ylabel('Số lượng')
+    return fig
+
+@create_figure
+def plot_category_distribution(products_df):
+    category_counts = products_df['sub_category'].value_counts().head(10)
+    fig, ax = plt.subplots(figsize=(12, 6))
+    category_counts.plot(kind='bar', ax=ax)
+    ax.set_title('Top 10 danh mục sản phẩm')
+    ax.set_xlabel('Danh mục')
+    ax.set_ylabel('Số lượng sản phẩm')
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    return fig
+
 def data_insight(products_df, ratings_df):
     if products_df is None or ratings_df is None:
         st.error("Không thể tải dữ liệu. Vui lòng thử lại sau.")
         return
-        
-    st.title("📊 Khám phá dữ liệu")
-    
+
     try:
-        # 1. Thống kê cơ bản
-        st.header("1️⃣ Thống kê cơ bản")
+        st.title("📊 Khám phá dữ liệu")
+        
+        # Basic Statistics
+        stats = {
+            'num_products': len(products_df),
+            'num_categories': products_df['sub_category'].nunique(),
+            'num_ratings': len(ratings_df),
+            'num_users': ratings_df['user_id'].nunique()
+        }
         
         col1, col2 = st.columns(2)
         with col1:
-            st.metric("Tổng số sản phẩm", f"{len(products_df):,}")
-            st.metric("Số danh mục con", f"{products_df['sub_category'].nunique():,}")
-            
+            st.metric("Tổng số sản phẩm", f"{stats['num_products']:,}")
+            st.metric("Số danh mục con", f"{stats['num_categories']:,}")
         with col2:
-            st.metric("Tổng số đánh giá", f"{len(ratings_df):,}")
-            st.metric("Số người dùng", f"{ratings_df['user_id'].nunique():,}")
-        
-        # 2. Phân bố giá
-        st.header("2️⃣ Phân bố giá sản phẩm")
-        
-        fig, ax = plt.subplots(figsize=(10, 6))
-        sns.histplot(data=products_df, x='price', bins=50, ax=ax)
-        ax.set_title('Phân bố giá sản phẩm')
-        ax.set_xlabel('Giá (VNĐ)')
-        ax.set_ylabel('Số lượng')
-        st.pyplot(fig)
-        plt.close(fig)
-        
-        # 3. Top danh mục
-        st.header("3️⃣ Top danh mục sản phẩm")
-        
-        category_counts = products_df['sub_category'].value_counts().head(10)
-        fig, ax = plt.subplots(figsize=(12, 6))
-        category_counts.plot(kind='bar', ax=ax)
-        ax.set_title('Top 10 danh mục sản phẩm')
-        ax.set_xlabel('Danh mục')
-        ax.set_ylabel('Số lượng sản phẩm')
-        plt.xticks(rotation=45, ha='right')
-        plt.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
-        
-        # 4. Phân bố độ dài mô tả
-        st.header("4️⃣ Phân bố độ dài mô tả sản phẩm")
-        
-        # Calculate description lengths safely
-        products_df['desc_len'] = products_df['description'].fillna('').astype(str).str.len()
-        
-        fig, ax = plt.subplots(figsize=(10, 6))
-        sns.histplot(data=products_df, x='desc_len', bins=50, ax=ax)
-        ax.set_title('Phân bố độ dài mô tả sản phẩm')
-        ax.set_xlabel('Độ dài mô tả (ký tự)')
-        ax.set_ylabel('Số lượng')
-        st.pyplot(fig)
-        plt.close(fig)
-        
-        # 5. Phân bố rating
-        st.header("5️⃣ Phân bố đánh giá")
-        
-        fig, ax = plt.subplots(figsize=(10, 6))
-        sns.histplot(data=ratings_df, x='rating', bins=20, ax=ax)
-        ax.set_title('Phân bố điểm đánh giá')
-        ax.set_xlabel('Điểm đánh giá')
-        ax.set_ylabel('Số lượng')
-        st.pyplot(fig)
-        plt.close(fig)
-        
-        # Clear memory
-        gc.collect()
-        
+            st.metric("Tổng số đánh giá", f"{stats['num_ratings']:,}")
+            st.metric("Số người dùng", f"{stats['num_users']:,}")
+
+        # Sample data display
+        st.markdown("### 🛍️ Dữ liệu sản phẩm mẫu")
+        st.dataframe(products_df.head(10))
+        st.markdown("### ⭐ Dữ liệu đánh giá mẫu")
+        st.dataframe(ratings_df.head(10))
+
+        # Basic visualizations with error handling
+        try:
+            st.header("📊 Phân bố giá sản phẩm")
+            fig, ax = plt.subplots(figsize=(10, 6))
+            sns.histplot(data=products_df, x='price', bins=50, ax=ax)
+            ax.set_title('Phân bố giá sản phẩm')
+            ax.set_xlabel('Giá (VNĐ)')
+            ax.set_ylabel('Số lượng')
+            st.pyplot(fig)
+            plt.close(fig)
+            gc.collect()
+        except Exception as e:
+            st.warning("Không thể hiển thị biểu đồ phân bố giá.")
+
+        try:
+            st.header("📊 Top danh mục sản phẩm")
+            category_counts = products_df['sub_category'].value_counts().head(10)
+            fig, ax = plt.subplots(figsize=(12, 6))
+            category_counts.plot(kind='bar', ax=ax)
+            plt.xticks(rotation=45, ha='right')
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close(fig)
+            gc.collect()
+        except Exception as e:
+            st.warning("Không thể hiển thị biểu đồ danh mục sản phẩm.")
+
+        try:
+            st.header("📊 Phân bố đánh giá")
+            fig, ax = plt.subplots(figsize=(10, 6))
+            sns.histplot(data=ratings_df, x='rating', bins=20, ax=ax)
+            ax.set_title('Phân bố điểm đánh giá')
+            ax.set_xlabel('Điểm đánh giá')
+            ax.set_ylabel('Số lượng')
+            st.pyplot(fig)
+            plt.close(fig)
+            gc.collect()
+        except Exception as e:
+            st.warning("Không thể hiển thị biểu đồ phân bố đánh giá.")
+
     except Exception as e:
-        st.error("Có lỗi xảy ra khi phân tích dữ liệu. Vui lòng thử lại sau.")
+        st.error("Có lỗi xảy ra khi phân tích dữ liệu.")
         st.exception(e)
+    finally:
+        gc.collect()
+
+@create_figure
+def plot_description_distribution(products_df):
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.histplot(data=products_df, x='desc_len', bins=50, ax=ax)
+    ax.set_title('Phân bố độ dài mô tả sản phẩm')
+    ax.set_xlabel('Độ dài mô tả (ký tự)')
+    ax.set_ylabel('Số lượng')
+    return fig
+
+@create_figure
+def plot_rating_distribution(ratings_df):
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.histplot(data=ratings_df, x='rating', bins=20, ax=ax)
+    ax.set_title('Phân bố điểm đánh giá')
+    ax.set_xlabel('Điểm đánh giá')
+    ax.set_ylabel('Số lượng')
+    return fig
+
+def display_user_stats(stats):
+    st.header("👥 Thống kê người dùng")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.metric("Người dùng đánh giá nhiều nhất", 
+                 f"User {stats['top_reviewer']}", 
+                 f"{stats['top_reviewer_count']} đánh giá")
+        st.metric("Người dùng chi tiêu nhiều nhất",
+                 f"User {stats['top_spender']}", 
+                 f"{stats['top_spend_amount']:,.0f} VNĐ")
+                 
+    with col2:
+        st.metric("Người dùng đánh giá 5 sao nhiều nhất",
+                 f"User {stats['top_five_star_user']}", 
+                 f"{stats['top_five_star_count']} đánh giá")
 
     st.image("images/insight.jpeg", width=1000)
     st.title("Một số thông tin về dữ liệu")
