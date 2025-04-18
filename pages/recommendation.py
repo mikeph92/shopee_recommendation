@@ -30,79 +30,130 @@ if physical_devices:
 
 @st.cache_resource(ttl=3600)  # Cache for 1 hour
 def load_cb_model():
-    path = "models/content_based_model.pkl"
-    if not os.path.exists(path):
-        st.error("❌ Không tìm thấy file content_based_model.pkl")
-        st.stop()
-    model = joblib.load(path)
-    # Optimize memory usage
-    if 'tfidf_matrix' in model:
-        model['tfidf_matrix'] = model['tfidf_matrix'].tocsr()  # Convert to CSR format for better memory efficiency
-    return model
+    try:
+        path = "models/content_based_model.pkl"
+        if not os.path.exists(path):
+            st.error("Model file not found.")
+            return None
+            
+        with st.spinner('Loading content-based model...'):
+            model = joblib.load(path)
+            # Optimize memory usage and sanitize data
+            if 'tfidf_matrix' in model:
+                model['tfidf_matrix'] = model['tfidf_matrix'].tocsr()  # Convert to CSR format
+            gc.collect()  # Force garbage collection
+            return model
+    except Exception as e:
+        # Generic error message
+        st.error("An error occurred while loading the content-based model.")
+        return None
 
 @st.cache_resource(ttl=3600)  # Cache for 1 hour
 def load_cf_model():
-    path_model = "models/matrix_factorizer_keras_model.h5"
-    path_meta = "models/id_mappings.pkl"
+    try:
+        path_model = "models/matrix_factorizer_keras_model.h5"
+        path_meta = "models/id_mappings.pkl"
 
-    if not os.path.exists(path_model):
-        st.error("❌ Không tìm thấy file models/matrix_factorizer_keras_model.h5")
-        st.stop()
-    elif not os.path.exists(path_meta):
-        st.error("❌ Không tìm thấy file models/id_mappings.pkl")
-        st.stop()
-    
-    # Load model with memory optimization
-    with tf.device('/CPU:0'):  # Force CPU usage
-        model = load_model(path_model, compile=False)
-        # Convert model to TF-Lite format for smaller memory footprint
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        tflite_model = converter.convert()
+        if not os.path.exists(path_model) or not os.path.exists(path_meta):
+            st.error("Model files not found.")
+            return None, None
         
-    meta = joblib.load(path_meta)
-    
-    # Clear any unused memory
-    gc.collect()
-    
-    return tflite_model, meta
+        with st.spinner('Loading collaborative filtering model...'):
+            # Load model with memory optimization
+            with tf.device('/CPU:0'):  # Force CPU usage
+                model = load_model(path_model, compile=False)
+                # Convert model to TF-Lite format for smaller memory footprint
+                converter = tf.lite.TFLiteConverter.from_keras_model(model)
+                converter.optimizations = [tf.lite.Optimize.DEFAULT]
+                tflite_model = converter.convert()
+                
+            # Load metadata with minimal data
+            meta = joblib.load(path_meta)
+            if isinstance(meta, dict):
+                # Only keep necessary mappings
+                meta = {
+                    'user_mapping': meta.get('user_mapping', {}),
+                    'product_mapping': meta.get('product_mapping', {}),
+                    'mu': meta.get('mu', 0.0)
+                }
+            
+            # Clear any unused memory
+            gc.collect()
+            
+            return tflite_model, meta
+    except Exception as e:
+        # Generic error message
+        st.error("An error occurred while loading the collaborative filtering model.")
+        return None, None
 
 
 # ====== Hiển thị sản phẩm gợi ý ======
 def display_recommendations(result_df, is_cb=True):
     if result_df is None or result_df.empty:
         st.warning("🙁 Không tìm thấy sản phẩm phù hợp.")
+        return
+
+    # Add pagination
+    items_per_page = 5
+    total_items = len(result_df)
+    total_pages = (total_items + items_per_page - 1) // items_per_page
+    
+    if total_pages > 1:
+        current_page = st.number_input('Trang', min_value=1, max_value=total_pages, value=1) - 1
+        start_idx = current_page * items_per_page
+        end_idx = min(start_idx + items_per_page, total_items)
+        current_items = result_df.iloc[start_idx:end_idx]
     else:
-        for _, row in result_df.iterrows():
-            with st.container():
-                cols = st.columns([1, 4])
-                with cols[0]:
-                    try:
-                        st.image(row['image'], width=120)
-                    except:
-                        st.image("images/no_image.jpg", width=120)
+        current_items = result_df
 
-                with cols[1]:
-                    mota = str(row['description'])
-                    short_desc = mota[:200] + "..." if len(mota) > 200 else mota
+    # Display current page items
+    for _, row in current_items.iterrows():
+        with st.container():
+            cols = st.columns([1, 4])
+            with cols[0]:
+                try:
+                    # Use a placeholder while loading image
+                    image_placeholder = st.empty()
+                    image_placeholder.image("images/loading.gif", width=120)
+                    
+                    # Load image in background
+                    @st.cache_data(ttl=3600)
+                    def load_image(image_url):
+                        try:
+                            return image_url
+                        except:
+                            return "images/no_image.jpg"
+                    
+                    image_url = load_image(row['image'])
+                    image_placeholder.image(image_url, width=120)
+                except:
+                    st.image("images/no_image.jpg", width=120)
 
-                    st.markdown(f"""
-                    **🧢 Tên sản phẩm:** {row['product_name']}  
-                    **📦 Loại sản phẩm:** {row['sub_category']}  
-                    **💸 Giá:** {int(row['price']):,}₫  
-                    **⭐ Đánh giá:** {float(row['rating']):.1f}  
-                    **📖 Mô tả:** {short_desc}
-                    """)
+            with cols[1]:
+                mota = str(row['description'])
+                short_desc = mota[:200] + "..." if len(mota) > 200 else mota
 
-                    if is_cb and 'similarity' in row:
-                        st.markdown(f"📊 **Độ tương đồng:** {float(row['similarity']):.3f}")
-                    elif not is_cb and 'predict' in row and float(row['predict']) > 0:
-                        st.markdown(f"📊 **Dự đoán:** {float(row['predict']):.1f}")
-                        
-                    st.markdown(f"""
-                                <a href="{row['link']}" target="_blank">👉 Xem chi tiết sản phẩm</a>
-                                """, unsafe_allow_html=True)
-                st.markdown("---")
+                st.markdown(f"""
+                **🧢 Tên sản phẩm:** {row['product_name']}  
+                **📦 Loại sản phẩm:** {row['sub_category']}  
+                **💸 Giá:** {int(row['price']):,}₫  
+                **⭐ Đánh giá:** {float(row['rating']):.1f}  
+                **📖 Mô tả:** {short_desc}
+                """)
+
+                if is_cb and 'similarity' in row:
+                    st.markdown(f"📊 **Độ tương đồng:** {float(row['similarity']):.3f}")
+                elif not is_cb and 'predict' in row and float(row['predict']) > 0:
+                    st.markdown(f"📊 **Dự đoán:** {float(row['predict']):.1f}")
+                    
+                st.markdown(f"""
+                            <a href="{row['link']}" target="_blank">👉 Xem chi tiết sản phẩm</a>
+                            """, unsafe_allow_html=True)
+            st.markdown("---")
+            
+    # Show pagination info
+    if total_pages > 1:
+        st.markdown(f"*Hiển thị {start_idx + 1}-{end_idx} trên tổng số {total_items} sản phẩm*")
 
 def display_carousel(result_df, num_cols=3):
     if result_df is None or result_df.empty:

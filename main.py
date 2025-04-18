@@ -32,44 +32,64 @@ def sidebar_bg(side_bg_path):
 
 @st.cache_data(ttl=3600)  # Cache for 1 hour
 def load_data():
-    # Load data in smaller chunks to manage memory
-    chunk_size = 5000  # Reduced chunk size
-    
-    # Load only necessary columns
-    usecols = ['product_id', 'product_name', 'sub_category', 'price', 'rating', 'description', 'image', 'link']
-    
-    # Load products data with dtype optimization
-    dtypes = {
-        'product_id': 'int32',
-        'price': 'float32',
-        'rating': 'float32'
-    }
-    
-    products_chunks = []
-    for chunk in pd.read_csv('data/Products_ThoiTrangNam_clean_part1.csv', 
-                           chunksize=chunk_size, 
-                           usecols=usecols,
-                           dtype=dtypes):
-        products_chunks.append(chunk)
-    for chunk in pd.read_csv('data/Products_ThoiTrangNam_clean_part2.csv', 
-                           chunksize=chunk_size,
-                           usecols=usecols,
-                           dtype=dtypes):
-        products_chunks.append(chunk)
-    products_clean = pd.concat(products_chunks, ignore_index=True)
-    
-    # Load ratings data with optimized dtypes
-    rating_clean = pd.read_csv("data/Products_ThoiTrangNam_rating_clean.csv", 
-                             sep='\t',
-                             dtype={'user_id': 'int32', 
-                                   'product_id': 'int32',
-                                   'rating': 'float32'})
-    
-    # Clear memory
-    del products_chunks
-    gc.collect()
-    
-    return products_clean, rating_clean
+    try:
+        # Load data in smaller chunks to manage memory
+        chunk_size = 1000  # Reduced from 5000 to 1000 for better memory management
+        
+        # Load only necessary columns - minimize data exposure
+        usecols = ['product_id', 'product_name', 'sub_category', 'price', 'rating', 'description', 'image', 'link']
+        
+        # Load products data with dtype optimization
+        dtypes = {
+            'product_id': 'int32',
+            'price': 'float32',
+            'rating': 'float32'
+        }
+        
+        products_chunks = []
+        try:
+            for chunk in pd.read_csv('data/Products_ThoiTrangNam_clean_part1.csv', 
+                                   chunksize=chunk_size, 
+                                   usecols=usecols,
+                                   dtype=dtypes):
+                # Sanitize sensitive data
+                chunk['description'] = chunk['description'].apply(lambda x: str(x)[:200] + '...' if len(str(x)) > 200 else str(x))
+                products_chunks.append(chunk)
+                gc.collect()  # Force garbage collection after each chunk
+                
+            for chunk in pd.read_csv('data/Products_ThoiTrangNam_clean_part2.csv', 
+                                   chunksize=chunk_size,
+                                   usecols=usecols,
+                                   dtype=dtypes):
+                # Sanitize sensitive data
+                chunk['description'] = chunk['description'].apply(lambda x: str(x)[:200] + '...' if len(str(x)) > 200 else str(x))
+                products_chunks.append(chunk)
+                gc.collect()  # Force garbage collection after each chunk
+                
+            products_clean = pd.concat(products_chunks, ignore_index=True)
+            
+            # Clear chunks from memory
+            del products_chunks
+            gc.collect()
+            
+            # Load ratings data with optimized dtypes and minimal data
+            rating_clean = pd.read_csv("data/Products_ThoiTrangNam_rating_clean.csv", 
+                                     sep='\t',
+                                     usecols=['user_id', 'product_id', 'rating'],
+                                     dtype={'user_id': 'int32', 
+                                           'product_id': 'int32',
+                                           'rating': 'float32'})
+            
+            return products_clean, rating_clean
+            
+        except FileNotFoundError:
+            st.error("Data files not found. Please check the data directory.")
+            return None, None
+            
+    except Exception as e:
+        # Generic error message to prevent data leakage
+        st.error("An error occurred while loading data. Please try again later.")
+        return None, None
 
 # ===== Giao diện chính =====
 def main():
